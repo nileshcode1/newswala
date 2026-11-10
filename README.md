@@ -44,7 +44,7 @@ After that it runs by itself every 30 minutes from 6:30 AM to 9:00 PM IST (30 po
 | Variable | Default | Meaning |
 |---|---|---|
 | `POSTS_PER_RUN` | `1` | posts per run (runs every 30 min, 6:30 AM–9 PM IST) |
-| `TOPIC_QUOTAS` | `national=12,education=5,state=7,sports=3,entertainment=3` | posts per day per section (total = daily limit) |
+| `TOPIC_QUOTAS` | `national=12,jobs=5,state=7,sports=3,entertainment=3` | posts per day per section (total = daily limit) |
 | `POST_STATUS` | `publish` | use `draft` to review posts before they go live |
 | `CLAUDE_MODEL` | `claude-opus-5-5` | `claude-sonnet-5-5` or `claude-haiku-5-5` are cheaper |
 | `CLAUDE_EFFORT` | `medium` | `low` is cheaper and faster |

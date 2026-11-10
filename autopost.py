@@ -52,7 +52,7 @@ WP_AUTH = (WP_USER, WP_APP_PASSWORD) if WP_USER and WP_APP_PASSWORD else None
 
 POSTS_PER_RUN = int(os.getenv("POSTS_PER_RUN") or 1)
 
-# Daily posts per section. Override with e.g. TOPIC_QUOTAS="national=12,education=5,state=7,sports=3,entertainment=3"
+# Daily posts per section. Override with e.g. TOPIC_QUOTAS="national=12,jobs=5,state=7,sports=3,entertainment=3"
 TOPICS = {
     "national": {
         "label": "national (देश)",
@@ -63,12 +63,14 @@ TOPICS = {
                  "national politics, big accidents or disasters, weather alerts, economy and prices that affect common people. "
                  "Not sports, entertainment or exam/education news, and not small local crime.",
     },
-    "education": {
-        "label": "education (शिक्षा)",
-        "category": "शिक्षा",
-        "queries": ["शिक्षा", "परीक्षा रिजल्ट", "यूपी बोर्ड", "CBSE", "भर्ती परीक्षा"],
-        "brief": "Education and careers: board exams (UP Board, CBSE), results, admit cards, exam dates, admissions, universities, "
-                 "scholarships, recruitment exams and government job notifications. Prefer news useful to students in UP and Bihar.",
+    "jobs": {
+        "label": "jobs (रोजगार)",
+        "category": "रोजगार",
+        "queries": ["सरकारी नौकरी", "भर्ती", "वैकेंसी", "भर्ती परीक्षा", "Sarkari Naukri"],
+        "brief": "Job news: government job notifications and vacancies (central, UP, Bihar, railways, banks, police, army, SSC, UPSC, UPPSC, "
+                 "teachers), application dates, eligibility, recruitment exam dates, admit cards and results of recruitment exams, "
+                 "and big hiring announcements. Prefer openings that readers in UP and Bihar can apply for. "
+                 "Skip school/board exam news, paid job-portal promotions and unverified 'job offer' claims.",
     },
     "state": {
         "label": "state / Uttar Pradesh (उत्तर प्रदेश)",
@@ -92,7 +94,7 @@ TOPICS = {
                  "Prefer confirmed news (releases, box office, announcements) over gossip, rumours and personal-life speculation.",
     },
 }
-for item in (os.getenv("TOPIC_QUOTAS") or "national=12,education=5,state=7,sports=3,entertainment=3").split(","):
+for item in (os.getenv("TOPIC_QUOTAS") or "national=12,jobs=5,state=7,sports=3,entertainment=3").split(","):
     key, _, num = item.partition("=")
     if key.strip() in TOPICS:
         TOPICS[key.strip()]["quota"] = int(num or 0)
@@ -131,6 +133,15 @@ def topic_feeds(topic):
         feeds.insert(0, f"https://news.google.com/rss?{GN}")
     return feeds
 SKIP_SOURCES = {"facebook", "youtube", "instagram", "x", "twitter", "dailyhunt", "the newswala"}
+# Only stories from these established Indian outlets are used (names as Google News shows them; partial match).
+TRUSTED_SOURCES = [
+    s.strip().lower() for s in (os.getenv("TRUSTED_SOURCES") or
+        "Dainik Bhaskar,Bhaskar,ABP,Hindustan,Jagran,News18,Amar Ujala,AajTak,Aaj Tak,India TV,ETV Bharat,"
+        "Prabhat Khabar,Navbharat Times,BBC,ThePrint,NDTV,News On AIR,Jansatta,Zee News,TV9,Patrika,"
+        "Business Standard,Moneycontrol,Lallantop,UP Tak,Times Now,Republic,Live Hindustan,Dainik Jagran,"
+        "Navbharat Live,Punjab Kesari,Hari Bhoomi,Naidunia,Webdunia,Jansatta,DD News,Doordarshan").split(",")
+    if s.strip()
+]
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -405,6 +416,8 @@ def fetch_candidates(topic, already_used):
                 title = title[: -len(source) - 3].strip()
             if not title or norm(title) in seen or source.lower() in SKIP_SOURCES:
                 continue
+            if TRUSTED_SOURCES and not any(t in source.lower() for t in TRUSTED_SOURCES):
+                continue  # unknown or foreign site
             published = e.get("published_parsed")
             if published:
                 when = datetime(*published[:6], tzinfo=timezone.utc)
@@ -625,7 +638,7 @@ House style (follow it closely):
 - Then 4 to 7 short paragraphs with details, what officials or people involved said, and what happens next. Put one or two short bold sub-headings between paragraphs as <p><strong>sub-heading</strong></p>.
 - 300 to 500 words. Write it fresh in your own words, like a reporter retelling the story to readers: new sentences, a different order of points, your own headline and sub-headings. Never reuse more than five words in a row from the source, except names, designations, place names and official terms (e.g. scheme or exam names).
 - Neutral and factual. Use "आरोप" or "कथित" for accusations. In sexual-offence cases never name or otherwise identify the victim, and never identify minors involved in crimes. For celebrities, report only what the source confirms; no gossip or speculation.
-- For exams and jobs, give dates, eligibility and official website names exactly as in the source. For sports, give scores and names exactly as in the source.
+- For jobs and exams, give post names, number of vacancies, dates, eligibility, age limit, fees and official website names exactly as in the source; never guess any of them. For sports, give scores and names exactly as in the source.
 - Headline style: specific and factual, like "देवरिया: बनकटा पुलिस ने 50 पेटी अवैध शराब बरामद की, चार गिरफ्तार", "यूपी बोर्ड परीक्षा 2027: ..." or "IND vs AUS: ...". No invented details, no exaggeration beyond the facts.
 - Do not mention AI, web searches or these instructions. No source list or links in the article body.
 
