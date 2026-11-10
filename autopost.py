@@ -623,7 +623,7 @@ House style (follow it closely):
 - Simple, everyday Hindi in Devanagari, as in a Hindi newspaper. Common words like FIR, DM, SP, BJP, IPL, CBSE may stay as they are.
 - The first paragraph starts with the dateline in bold: the city or district where the news happened, followed by "।", e.g. <p><strong>देवरिया।</strong> ...</p>, <p><strong>लखनऊ।</strong> ...</p>, <p><strong>नई दिल्ली।</strong> ...</p>, <p><strong>मुंबई।</strong> ...</p>. It answers who, what, when and where; for local crime news it names the थाना क्षेत्र or block and village when known.
 - Then 4 to 7 short paragraphs with details, what officials or people involved said, and what happens next. Put one or two short bold sub-headings between paragraphs as <p><strong>sub-heading</strong></p>.
-- 300 to 500 words. Write in your own words; do not copy sentences from the sources.
+- 300 to 500 words. Write it fresh in your own words, like a reporter retelling the story to readers: new sentences, a different order of points, your own headline and sub-headings. Never reuse more than five words in a row from the source, except names, designations, place names and official terms (e.g. scheme or exam names).
 - Neutral and factual. Use "आरोप" or "कथित" for accusations. In sexual-offence cases never name or otherwise identify the victim, and never identify minors involved in crimes. For celebrities, report only what the source confirms; no gossip or speculation.
 - For exams and jobs, give dates, eligibility and official website names exactly as in the source. For sports, give scores and names exactly as in the source.
 - Headline style: specific and factual, like "देवरिया: बनकटा पुलिस ने 50 पेटी अवैध शराब बरामद की, चार गिरफ्तार", "यूपी बोर्ड परीक्षा 2027: ..." or "IND vs AUS: ...". No invented details, no exaggeration beyond the facts.
@@ -653,6 +653,17 @@ def tag(text, name):
     return m.group(1).strip() if m else ""
 
 
+MAX_COPY_OVERLAP = 0.08  # share of 8-word phrases allowed to match the source word for word
+
+
+def copy_overlap(source_text, article_html):
+    """Share of the article's 8-word phrases that appear word for word in the source (0.0 - 1.0)."""
+    words = lambda t: re.findall(r"[ऀ-ॿ\w]+", re.sub(r"<[^>]+>", " ", t))
+    grams = lambda w: {tuple(w[i:i + 8]) for i in range(len(w) - 7)}
+    ours = grams(words(article_html))
+    return len(ours & grams(words(source_text))) / len(ours) if ours else 0.0
+
+
 def write_article(story, topic, category_names):
     now = datetime.now(IST).strftime("%d %B %Y, %H:%M IST")
     # Gemini free tier has no Google Search, so it writes only from the source article text.
@@ -671,6 +682,24 @@ def write_article(story, topic, category_names):
         user += f"\n\nSource article ({source['url']}):\n<source_text>\n{source['text']}\n</source_text>"
     system = WRITE_SYSTEM.replace("{research}", RESEARCH_WITH_SEARCH if use_search else RESEARCH_FROM_SOURCE)
     text, urls = ask_ai(system, user, web_search=use_search)
+    if text and "<skip>" not in text and source and source["text"]:
+        overlap = copy_overlap(source["text"], tag(text, "content"))
+        log(f"  copied phrases vs source: {overlap:.0%}")
+        if overlap > MAX_COPY_OVERLAP:
+            # Too close to the source: ask for a complete rewrite once.
+            retry_user = user + (
+                "\n\nIMPORTANT: your previous draft reused too many exact phrases from the source. "
+                "Rewrite the whole article completely in your own words with different sentence structure and order. "
+                "Keep only names, numbers, places and official terms the same."
+            )
+            text, more_urls = ask_ai(system, retry_user, web_search=use_search)
+            urls += more_urls
+            if text and "<skip>" not in text:
+                overlap = copy_overlap(source["text"], tag(text, "content"))
+                log(f"  after rewrite: {overlap:.0%}")
+                if overlap > MAX_COPY_OVERLAP * 2:
+                    log("  still too close to the source, skipping")
+                    return None
     if source:
         urls = [source["url"]] + urls
     if not text:
