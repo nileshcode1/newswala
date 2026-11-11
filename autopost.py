@@ -50,7 +50,6 @@ WP_USER = os.getenv("WP_USER", "")
 WP_APP_PASSWORD = os.getenv("WP_APP_PASSWORD", "")
 WP_AUTH = (WP_USER, WP_APP_PASSWORD) if WP_USER and WP_APP_PASSWORD else None
 
-POSTS_PER_RUN = int(os.getenv("POSTS_PER_RUN") or 1)
 
 # Daily posts per section. Override with e.g. TOPIC_QUOTAS="national=12,jobs=5,state=7,sports=3,entertainment=3"
 TOPICS = {
@@ -443,12 +442,12 @@ def wp_ensure_category(name, categories):
     return cid
 
 
-def pick_topic(posted_today):
+def pick_topic(posted_today, exclude=()):
     """Section that is furthest behind its daily quota, so sections mix through the day."""
     best, best_ratio = None, None
     for key, t in TOPICS.items():
         quota, done = t.get("quota", 0), posted_today.get(key, 0)
-        if quota <= 0 or done >= quota:
+        if key in exclude or quota <= 0 or done >= quota:
             continue
         ratio = done / quota
         if best is None or ratio < best_ratio or (ratio == best_ratio and quota > TOPICS[best]["quota"]):
@@ -730,65 +729,53 @@ def write_article(story, topic, category_names):
     return article
 
 
-# -------------------------------------------------------------------- main
-def main():
-    model = {"gemini": GEMINI_MODEL, "openai": OPENAI_MODEL}.get(AI_PROVIDER, MODEL)
-    log(f"AI provider: {AI_PROVIDER} ({model}), dry_run={DRY_RUN}")
-    if WP_AUTH:
-        wp_check_login()
-    elif not DRY_RUN:
-        log("WP_USER / WP_APP_PASSWORD are required to publish.")
-        return 1
-    else:
-        log("No WordPress login set: dry run uses public data only.")
-    state = load_state()
-    today = datetime.now(IST).date().isoformat()
-    posted_today = {}
-    for p in state["posted"]:
-        if p.get("time", "").startswith(today):
-            key = p.get("topic", "state")  # older entries were all UP/Deoria news
-            posted_today[key] = posted_today.get(key, 0) + 1
-    total_today = sum(posted_today.values())
-    log("Posted today: " + ", ".join(f"{k} {posted_today.get(k, 0)}/{t.get('quota', 0)}" for k, t in TOPICS.items())
-        + f" (total {total_today}/{MAX_POSTS_PER_DAY})")
-    topic_key = os.getenv("FORCE_TOPIC") or pick_topic(posted_today)
-    to_post = min(POSTS_PER_RUN, MAX_POSTS_PER_DAY - total_today)
-    if not topic_key or to_post <= 0:
-        log("Daily quota reached, nothing to do.")
+# ------------------------------------------------------------------ pacing
+# GitHub often skips scheduled runs, so every run checks how far behind the day's plan it is and catches up.
+WINDOW_START = (6, 30)  # IST: first post of the day
+WINDOW_END = (21, 0)    # IST: all of the day's posts should be out by this time
+MAX_POSTS_PER_RUN = int(os.getenv("MAX_POSTS_PER_RUN") or 3)
+
+
+def expected_by_now(now):
+    """How many posts the plan says should exist by `now` (30 spread evenly over the window)."""
+    start = now.replace(hour=WINDOW_START[0], minute=WINDOW_START[1], second=0, microsecond=0)
+    end = now.replace(hour=WINDOW_END[0], minute=WINDOW_END[1], second=0, microsecond=0)
+    if now < start:
         return 0
+    if now >= end:
+        return MAX_POSTS_PER_DAY
+    slot = (end - start) / MAX_POSTS_PER_DAY
+    return min(MAX_POSTS_PER_DAY, int((now - start) / slot) + 1)
+
+
+# -------------------------------------------------------------------- main
+def post_for_topic(topic_key, state, ctx):
+    """Find, write and publish one story for this section. Returns True if a post was made."""
     topic = TOPICS[topic_key]
-    log(f"Section for this run: {topic['label']}")
-
-    categories = wp_categories()
-    topic_cat_id = 0
-    if not DRY_RUN:
+    log(f"\n##### Section: {topic['label']}")
+    categories, cat_lookup = ctx["categories"], ctx["cat_lookup"]
+    topic_cat_id = cat_lookup.get(topic["category"].lower(), 0)
+    if not topic_cat_id and not DRY_RUN:
         topic_cat_id = wp_ensure_category(topic["category"], categories)
-    allowed = sorted(n for n, i in categories.items() if n.lower() not in EXCLUDED_CATEGORIES and i not in ALWAYS_CATEGORY_IDS)
-    cat_lookup = {n.lower(): i for n, i in categories.items()}
-    topic_cat_id = topic_cat_id or cat_lookup.get(topic["category"].lower(), 0)
+        cat_lookup[topic["category"].lower()] = topic_cat_id
 
-    site_titles = wp_recent_titles()
     used = [p["headline"] for p in state["posted"]] + [p["title"] for p in state["posted"]]
-    candidates = fetch_candidates(topic, [norm(t) for t in used + site_titles])
+    candidates = fetch_candidates(topic, [norm(t) for t in used + ctx["site_titles"]])
     if not candidates:
         log("No fresh headlines found.")
-        return 1
-
-    recent_titles = site_titles + [p["title"] for p in state["posted"][-60:]]
+        return False
+    recent_titles = ctx["site_titles"] + [p["title"] for p in state["posted"][-60:]]
     try:
-        stories = select_stories(topic, candidates, recent_titles, to_post + 2)  # 2 backups
+        stories = select_stories(topic, candidates, recent_titles, 3)  # 1 + 2 backups
     except AI_ERRORS as e:
         log(f"AI error while choosing stories: {e}")
-        return 1
+        return False
     log(f"Selected {len(stories)} stories: " + " | ".join(s["headline"] for s in stories))
 
-    posted = 0
     for story in stories:
-        if posted >= to_post:
-            break
         log(f"\n=== {story['headline']}")
         try:
-            art = write_article(story, topic, allowed)
+            art = write_article(story, topic, ctx["allowed"])
             if not art:
                 continue
             cat_ids = list(ALWAYS_CATEGORY_IDS) + ([topic_cat_id] if topic_cat_id else [])
@@ -809,8 +796,7 @@ def main():
                 log(f"[DRY RUN] {art['title']}\ncategories={cat_ids} tags={art['tags']}")
                 log(f"image: {img['source_page'] + ' (' + str(len(img['bytes'])) + ' bytes)' if img else 'none'}")
                 log(art["content"][:1500])
-                posted += 1
-                continue
+                return True
 
             media_id = 0
             if img:
@@ -846,10 +832,71 @@ def main():
                 "time": datetime.now(IST).isoformat(timespec="seconds"),
             })
             save_state(state)
-            posted += 1
+            return True
         except (*AI_ERRORS, RuntimeError, requests.RequestException, ValueError, KeyError) as e:
             log(f"  failed: {type(e).__name__}: {e}")
             time.sleep(3)
+    return False
+
+
+def main():
+    model = {"gemini": GEMINI_MODEL, "openai": OPENAI_MODEL}.get(AI_PROVIDER, MODEL)
+    log(f"AI provider: {AI_PROVIDER} ({model}), dry_run={DRY_RUN}")
+    if WP_AUTH:
+        wp_check_login()
+    elif not DRY_RUN:
+        log("WP_USER / WP_APP_PASSWORD are required to publish.")
+        return 1
+    else:
+        log("No WordPress login set: dry run uses public data only.")
+
+    state = load_state()
+    now = datetime.now(IST)
+    today = now.date().isoformat()
+    posted_today = {}
+    for p in state["posted"]:
+        if p.get("time", "").startswith(today):
+            key = p.get("topic", "state")  # older entries were all UP/Deoria news
+            posted_today[key] = posted_today.get(key, 0) + 1
+    total_today = sum(posted_today.values())
+    log("Posted today: " + ", ".join(f"{k} {posted_today.get(k, 0)}/{t.get('quota', 0)}" for k, t in TOPICS.items())
+        + f" (total {total_today}/{MAX_POSTS_PER_DAY})")
+
+    left_today = MAX_POSTS_PER_DAY - total_today
+    force = (os.getenv("FORCE_POSTS") or "").strip()  # manual "Run workflow" posts this many right away
+    if force:
+        to_post = min(int(force), left_today)
+    else:
+        expected = expected_by_now(now)
+        to_post = min(MAX_POSTS_PER_RUN, expected - total_today, left_today)
+        log(f"Plan: {expected} posts by {now:%H:%M} IST, {total_today} done -> posting {max(to_post, 0)} now")
+    if to_post <= 0:
+        log("On schedule or daily quota reached, nothing to do now.")
+        return 0
+
+    categories = wp_categories()
+    ctx = {
+        "categories": categories,
+        "cat_lookup": {n.lower(): i for n, i in categories.items()},
+        "allowed": sorted(n for n, i in categories.items()
+                          if n.lower() not in EXCLUDED_CATEGORIES and i not in ALWAYS_CATEGORY_IDS),
+        "site_titles": wp_recent_titles(),
+    }
+
+    posted, failed_topics = 0, set()
+    for _ in range(to_post + 3):  # a few extra tries in case a section has nothing usable
+        if posted >= to_post:
+            break
+        topic_key = os.getenv("FORCE_TOPIC") or pick_topic(posted_today, exclude=failed_topics)
+        if not topic_key:
+            break
+        if post_for_topic(topic_key, state, ctx):
+            posted += 1
+            posted_today[topic_key] = posted_today.get(topic_key, 0) + 1
+        else:
+            failed_topics.add(topic_key)
+            if os.getenv("FORCE_TOPIC"):
+                break
 
     log(f"\nDone: {posted}/{to_post} articles {'generated (dry run)' if DRY_RUN else 'posted'}.")
     return 0 if posted else 1

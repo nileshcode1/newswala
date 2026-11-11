@@ -1,6 +1,6 @@
 # The Newswala – auto posting
 
-A GitHub Action that publishes **30 Hindi news posts a day** to https://thenewswala.com: one post every 30 minutes from 6:30 AM to 9:00 PM IST, with a hard limit of 30 per day.
+A GitHub Action that publishes **30 Hindi news posts a day** to https://thenewswala.com, spread evenly from 6:30 AM to 9:00 PM IST (12 national, 5 jobs, 7 UP, 3 sports, 3 entertainment). It is triggered every 15 minutes; because GitHub skips some scheduled runs, each run checks how far behind the plan it is and posts up to 3 to catch up, never more than 30 a day.
 
 Each run:
 1. Reads fresh Hindi headlines from Google News (Deoria, Salempur, Barhaj, Gorakhpur, Kushinagar, UP, plus the top headlines).
@@ -37,13 +37,13 @@ Go to the repo → **Settings → Secrets and variables → Actions → New repo
 Open **Actions → Auto-post news → Run workflow**. Leave **Dry run** ticked and run it.
 The log shows the stories picked, the articles written and the image found. Nothing is published.
 Then run it again with **Dry run** unticked to publish 1 real post.
-After that it runs by itself every 30 minutes from 6:30 AM to 9:00 PM IST (30 posts a day).
+After that it runs by itself (30 posts a day, 6:30 AM to 9:00 PM IST).
 
 ## Optional settings (Settings → Variables → Actions)
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `POSTS_PER_RUN` | `1` | posts per run (runs every 30 min, 6:30 AM–9 PM IST) |
+| `MAX_POSTS_PER_RUN` | `3` | most posts one run may publish when catching up after GitHub skipped runs |
 | `TOPIC_QUOTAS` | `national=12,jobs=5,state=7,sports=3,entertainment=3` | posts per day per section (total = daily limit) |
 | `POST_STATUS` | `publish` | use `draft` to review posts before they go live |
 | `CLAUDE_MODEL` | `claude-opus-5-5` | `claude-sonnet-5-5` or `claude-haiku-5-5` are cheaper |

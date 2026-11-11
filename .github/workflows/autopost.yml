@@ -2,9 +2,11 @@ name: Auto-post news
 
 on:
   schedule:
-    # Every 30 min from 01:00 to 15:30 UTC = 6:30 AM to 9:00 PM IST -> 30 runs x 1 post = 30 posts/day.
-    # The script also stops at the daily section quotas (30 total), so extra or late runs never go over.
-    - cron: "0,30 1-15 * * *"
+    # Every 15 min at off-peak minutes, 01:07-17:52 UTC = 6:37 AM to 11:22 PM IST.
+    # GitHub skips many scheduled runs, so the script paces itself: each run posts only if it is
+    # behind the day's plan (30 posts spread 6:30 AM-9 PM IST), up to 3 at once to catch up,
+    # and never more than the daily section quotas (30 total).
+    - cron: "7,22,37,52 1-17 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -12,7 +14,7 @@ on:
         type: boolean
         default: true
       posts:
-        description: "How many posts this run"
+        description: "How many posts to publish right now (ignores the schedule, still respects the daily limit)"
         default: "1"
 
 permissions:
@@ -53,7 +55,8 @@ jobs:
           TOPIC_QUOTAS: ${{ vars.TOPIC_QUOTAS }}
           ALWAYS_CATEGORY_IDS: ${{ vars.ALWAYS_CATEGORY_IDS }}
           REQUIRE_IMAGE: ${{ vars.REQUIRE_IMAGE }}
-          POSTS_PER_RUN: ${{ inputs.posts || vars.POSTS_PER_RUN || '1' }}
+          FORCE_POSTS: ${{ inputs.posts }}
+          MAX_POSTS_PER_RUN: ${{ vars.MAX_POSTS_PER_RUN }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
         run: python autopost.py
 
